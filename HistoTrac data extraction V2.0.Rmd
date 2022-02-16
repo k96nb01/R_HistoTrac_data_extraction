@@ -1,0 +1,190 @@
+---
+title: "HistoTrac data extraction V2.0.rmd"
+output: html_notebook
+Notes: Revised code so that error-correcting code is run once at the beginning, and then extraction of all of the tables uses the "pull" function to make use of that error-correction.
+---
+```{r}
+#This project requires 3 plugins, which can be installed with this code:
+install.packages("odbc")
+install.packages("DBI")
+install.packages("tidyverse")
+```
+
+```{r}
+#Loading libraries. After the packages above are installed, they need to be loaded. They only need to be installed on a computer once, but they need to be loaded every time RStudio is opened.
+#The memory.limit function was required on the computer I used to increase the memory size so that large tables could be loaded. It may not be needed in all cases.
+library(DBI)
+library(odbc)
+library(tidyverse)
+memory.limit(size=56000)
+```
+
+```{r}
+#This code connects to the HistoTrac database. The computer RStudio is running on needs to have a HistoTrac connection named "HistotTrac." See Powerpoint file for instructions on how to create a connection on a Windows computer.
+
+# Connecting to the HistoTrac database
+con <- dbConnect(odbc::odbc(), "HistoTrac",  timeout = 10)
+
+# Error-correcting code. This helps R access the HistoTrac server.
+testpull <- function(con, tbnm, rownumber, ls_colnm, sp, ep) {
+  re <- tryCatch({
+    # try to query database based on given start point and end point of column
+    dt <- dbGetQuery(con, paste("SELECT TOP", rownumber, paste0(ls_colnm[sp:ep], collapse = ', '), "FROM", tbnm))
+    return(dt)
+  },
+  error = function(error_message) {
+    return("error")
+  },
+  warning = function(warning_message) {
+    return("warning")
+  }
+  )
+}
+pull <- function(con, tbnm) {
+  # get total row number based on table name
+  rownumber <- dbGetQuery(con, paste("SELECT count(*) FROM", tbnm))[[1]]
+  # get all column names of the table
+  ls_colnm <- c(dbGetQuery(con, paste("SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME='",tbnm,"'",sep=""))$COLUMN_NAME)
+  # set up variables for iteration
+  colnumber <- length(ls_colnm)
+  mincolnbr <- 1
+  maxcolnbr <- colnumber
+  sp <- mincolnbr
+  ep <- maxcolnbr
+  # initiate an empty dataframe
+  df_total <- setNames(data.frame(matrix(nrow=rownumber, ncol=1)),c("x"))
+  
+  while (dim(df_total)[2] < maxcolnbr) {
+    #print(c(sp,ep))
+    df_test <- testpull(con, tbnm, rownumber, ls_colnm, sp, ep)
+    #print(typeof(df_test))
+    if (typeof(df_test) == "list") {
+      # save successfully pulled data
+      if (c(colnames(df_total))[1] == "x") {
+        df_total <- subset(cbind(df_total, df_test),select=-c(x))
+      }
+      else {
+        df_total <- cbind(df_total, df_test)
+      }
+      if (dim(df_total)[2] < maxcolnbr) {
+        # adjust both start and end points when testpull succeeded
+        sp <- ep + 1
+        ep <- maxcolnbr
+        #print(c(sp, ep))
+      }
+    }
+    else {
+      dbDisconnect(con)
+      con <- dbConnect(odbc::odbc(), "HistoTrac", timeout = 10)
+      # adjust end point when testpull failed
+      ep <- floor(sp-1+((ep-(sp-1))/2))
+      #print(c(sp, ep))
+    }
+  }
+  return(df_total)
+}
+
+
+#Pulling a list of available tables in HistoTrac and adding it to "HTtableList"
+(HTtableList <- dbListTables(con) %>% as_tibble)
+
+#This will show all of the tables in the HistoTrac database. Not all of them are used.
+```
+
+```{r}
+#Extract and save Sample table. Use as a template for extracting and saving tables; just change the table names in the second line of code.
+con <- dbConnect(odbc::odbc(), "HistoTrac", timeout = 10)
+(dtSample <- pull(con, "Sample") %>% as_tibble)
+
+#The code below saves the table in "rds" format, an R format that preserves the table structure, and results in smaller files than "csv.gz." The only limitation is the rds file can only be opened in R. If for some reason you need to read the files by another system, use the second line of code (remove the "#") to save it as a csv.gz file.
+saveRDS(dtSample, file = "Sample.rds")
+#dtSample %>% write_csv("Sample.csv.gz")
+```
+
+```{r}
+#Extract and save Patient table
+con <- dbConnect(odbc::odbc(), "HistoTrac", timeout = 10)
+(dtPatient <- pull(con, "Patient") %>% as_tibble)
+#dtPatient %>% write_csv("Patient.csv.gz")
+saveRDS(dtPatient, file = "Patient.rds")
+```
+
+```{r}
+#save Location table
+con <- dbConnect(odbc::odbc(), "HistoTrac", timeout = 10)
+(dtLocation <- pull(con, "Location") %>% as_tibble)
+#dtLocation %>% write_csv("Location.csv.gz")
+saveRDS(dtLocation, file = "Location.rds")
+```
+
+```{r}
+#save SampleLocation table
+con <- dbConnect(odbc::odbc(), "HistoTrac", timeout = 10)
+(dtSampleLocation <- pull(con, "SampleLocation") %>% as_tibble)
+#dtSampleLocation %>% write_csv("SampleLocation.csv.gz")
+saveRDS(dtSampleLocation, file = "SampleLocation.rds")
+```
+
+```{r}
+#save TestDetail table
+con <- dbConnect(odbc::odbc(), "HistoTrac", timeout = 10)
+(dtTestDetail <- dbReadTable(con, "TestDetail") %>% as_tibble)
+#dtTestDetail %>% write_csv("TestDetail.csv.gz")
+saveRDS(dtTestDetail, file = "TestDetail.rds")
+```
+
+```{r}
+#save TransplantHistory table
+con <- dbConnect(odbc::odbc(), "HistoTrac", timeout = 10)
+(dtTransplantHistory <- pull(con, "TransplantHistory") %>% as_tibble)
+#dtTransplantHistory %>% write_csv("TransplantHistory.csv.gz")
+saveRDS(dtTransplantHistory, file = "TransplantHistory.rds")
+```
+
+```{r}
+#save Xmatch table
+con <- dbConnect(odbc::odbc(), "HistoTrac", timeout = 10)
+(dtXmatch <- pull(con, "Xmatch") %>% as_tibble)
+#dtXmatch %>% write_csv("Xmatch.csv.gz")
+saveRDS(dtXmatch, file = "Xmatch.rds")
+```
+
+```{r}
+#save UserXmatch table
+con <- dbConnect(odbc::odbc(), "HistoTrac", timeout = 10)
+(dtUserXmatch <- pull(con, "UserXmatch") %>% as_tibble)
+#dtUserXmatch %>% write_csv("UserXmatch.csv.gz")
+saveRDS(dtUserXmatch, file = "UserXmatch.rds")
+```
+
+```{r}
+#save RelatedPatient table
+con <- dbConnect(odbc::odbc(), "HistoTrac", timeout = 10)
+(dtRelatedPatient <- pull(con, "RelatedPatient") %>% as_tibble)
+#dtRelatedPatient %>% write_csv("RelatedPatient.csv.gz")
+saveRDS(dtRelatedPatient, file = "RelatedPatient.rds")
+```
+
+```{r}
+#Save PatientCase table
+con <- dbConnect(odbc::odbc(), "HistoTrac", timeout = 10)
+(dtPatientCase <- pull(con, "PatientCase") %>% as_tibble)
+#dtPatientCase %>% write_csv("PatientCase.csv.gz")
+saveRDS(dtPatientCase, file = "PatientCase.rds")
+```
+
+```{r}
+#Extract the Test table
+con <- dbConnect(odbc::odbc(), "HistoTrac", timeout = 10)
+(dtTest <- pull(con, "Test") %>% as_tibble)
+#dtTest %>% write_csv("Test.csv.gz")
+saveRDS(dtTest, file = "Test.rds")
+```
+
+```{r}
+#Extract UserTest table. 
+con <- dbConnect(odbc::odbc(), "HistoTrac", timeout = 10)
+(dtUserTest <- pull(con, "UserTest") %>% as_tibble)
+#dtUserTest %>% write_csv("UserTest.csv.gz")
+saveRDS(dtUserTest, file = "UserTest.rds")
+```
